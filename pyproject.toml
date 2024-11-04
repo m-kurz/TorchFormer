@@ -1,0 +1,39 @@
+[build-system]
+requires = ["poetry-core>=1.2.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "torchformer"
+version = "0.1.0"
+authors = [
+    "Marius Kurz <marius.kurz@cwi.nl>",
+]
+description = "A PyTorch implementation of the transformer architecture."
+license = "GPL-3.0-or-later"
+readme = "README.md"
+repository = "https://github.com/m-kurz/torchformer"
+keywords = [
+    "transformer",
+    "machine learning",
+    "deep learning",
+    "pytorch",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent"
+]
+
+[tool.poetry.dependencies]
+torch = "*"
+
+# Add development dependencies as `dev` extra
+pytest = { version = "*", optional = true }
+pytest-cov = { version = "*", optional = true }
+
+[tool.poetry.extras]
+dev = [
+    "pytest",
+    "pytest-cov"
+]
