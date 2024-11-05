@@ -56,25 +56,28 @@ class DotProductAttention(nn.Module):
         self.w_k = nn.Parameter(torch.randn(d_model, d_k))
         self.w_v = nn.Parameter(torch.randn(d_model, d_v))
 
-    def forward(self, value_in):
+    def forward(self, x, x_enc=None):
         # First project input linearly to query, key and value
-        V, Q, K = self._projection(value_in)
-        # Calculate attention scores
+        V, Q, K = self._projection(x, x_enc)
         scores = torch.matmul(Q, K.transpose(-2, -1)) / self.d_k ** 0.5
-        # Masking
+        # Masking: Set upper triangular matrix to -inf before softmax
         if self.mask:
             mask = torch.tril(torch.ones_like(scores))
             scores = scores.masked_fill(mask == 0, -float('inf'))
-        # Probabilities via Softmax
+        # Probabilities via Softmax (row-wise)
         attention = torch.softmax(scores, dim=-2)
         return torch.matmul(attention, V), attention
 
-    def _projection(self, value_in):
-        """Perform projection with query, key and value weights"""
-        v = torch.matmul(value_in, self.w_v)  # (batch_size, seq_len, d_v)
-        q = torch.matmul(value_in, self.w_q)  # (batch_size, seq_len, d_k)
-        k = torch.matmul(value_in, self.w_k)  # (batch_size, seq_len, d_k)
-        return v, q, k
+    def _projection(self, x, x_enc=None):
+        """Perform projection with query, key and value weights."""
+        V = torch.matmul(x, self.w_v)
+        if x_enc is None:
+            Q = torch.matmul(x, self.w_q)
+            K = torch.matmul(x, self.w_k)
+        else:
+            Q = torch.matmul(x_enc, self.w_q)
+            K = torch.matmul(x_enc, self.w_k)
+        return V, Q, K
 
 
 class MultiHeadAttention(nn.Module):
@@ -95,10 +98,13 @@ class MultiHeadAttention(nn.Module):
         # Add final projection layer
         self.w_proj = nn.Parameter(torch.randn(self.num_heads * d_v, d_model))
 
-    def forward(self, x):
+    def forward(self, x, x_encoder=None):
         head_outputs = []
         for i in range(self.num_heads):
-            head_output, _ = getattr(self, f'att_{i}')(x)
+            if x_encoder is not None:
+                head_output, _ = getattr(self, f'att_{i}')(x, x_encoder)
+            else:
+                head_output, _ = getattr(self, f'att_{i}')(x)
             head_outputs.append(head_output)
         return torch.matmul(torch.cat(head_outputs, dim=-1), self.w_proj)
 
@@ -181,24 +187,23 @@ class TransformerDecoderBlock(nn.Module):
             self.dropout2 = None
             self.dropout3 = None
 
-    def forward(self, x, x_encoder):
+    def forward(self, x, x_enc):
         # First block: Masked Self-Attention
         x1 = self.masked_attention(x)
         if self.dropout1 is not None:
-            x1 = self.dropout(x1)
+            x1 = self.dropout1(x1)
         x  = self.norm1(x + x1)
 
         # Second block: Encoder/Decoder-Attention
-        # TODO: Requires encoder input
-        x1 = self.attention(x)
+        x1 = self.attention(x, x_enc)
         if self.dropout2 is not None:
-            x1 = self.dropout(x1)
+            x1 = self.dropout2(x1)
         x = self.norm2(x + x1)
 
         # Third block: Feed-Forward Network
         x1 = self.ff(x)
-        if self.dropout2 is not None:
-            x1 = self.dropout(x1)
-        x = self.norm2(x + x1)
+        if self.dropout3 is not None:
+            x1 = self.dropout3(x1)
+        x = self.norm3(x + x1)
 
         return x
