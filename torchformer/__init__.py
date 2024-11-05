@@ -28,6 +28,7 @@
 from .layers import FullyConnectedLayer
 from .layers import MultiHeadAttention
 from .layers import DotProductAttention
-from .layers import TransformerBlock
+from .layers import TransformerEncoderBlock
+from .layers import TransformerDecoderBlock
 
 __version__ = "0.1.0"
