@@ -32,11 +32,12 @@ This module implements in PyTorch the basic building blocks of the transformer
 model as proposed by Vaswani et al. in the paper "Attention is All You Need".
 
 Classes:
-    FullyConnectedLayer: A simple fully-connected layer with activation.
-    DotProductAttention: The dot-product attention mechanism.
-    MultiHeadAttention: The multi-head attention mechanism.
+    FullyConnectedLayer: Two fully-connected layers with activation in between.
+    DotProductAttention: Dot-product attention mechanism.
+    MultiHeadAttention: Multi-head version of the dot-product attention.
     TransformerEncoderBlock: A single encoder block of the transformer model.
     TransformerDecoderBlock: A single decoder block of the transformer model.
+    PositionalEncoding: Positional encoding of the input embeddings.
 """
 
 import torch
@@ -358,3 +359,38 @@ class TransformerDecoderBlock(nn.Module):
         x = self.norm3(x + x1)
 
         return x
+
+
+class PositionalEncoding(nn.Module):
+    """Positional Encoding.
+
+    This module implements the positional encoding as proposed by Vaswani et al.
+    in the paper "Attention is All You Need". It adds sinusoidal positional
+    encodings to the input embeddings to provide information about the position
+    of the tokens in the sequence.
+
+    Args:
+        d_model (int): The embedding dimensionality.
+        context_size (int): The maximum length of the input sequence.
+    """
+    def __init__(self, d_model, context_length=512):
+        super().__init__()
+        # Compute positional encodings
+        div_term = torch.exp(torch.arange(0, d_model, 2) / d_model * -(torch.log(torch.tensor(10000.0))))
+        pos = torch.arange(context_length).unsqueeze(1)
+        pe = torch.zeros(context_length, d_model)
+        pe[:, 0::2] = torch.sin(pos * div_term)
+        pe[:, 1::2] = torch.cos(pos * div_term)
+        # Register constant positional encodings as buffer
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        """Add positional encodings to the input embeddings.
+
+        Args:
+            x (torch.Tensor): The input embeddings.
+
+        Returns:
+            torch.Tensor: The input embeddings with added positional encoding.
+        """
+        return x + self.pe[:x.size(0), :]
