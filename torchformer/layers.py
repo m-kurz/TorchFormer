@@ -26,11 +26,34 @@
 # SOFTWARE.
 
 
+"""This module implements the basic building blocks of the transformer model.
+
+This module implements in PyTorch the basic building blocks of the transformer
+model as proposed by Vaswani et al. in the paper "Attention is All You Need".
+
+Classes:
+    FullyConnectedLayer: A simple fully-connected layer with activation.
+    DotProductAttention: The dot-product attention mechanism.
+    MultiHeadAttention: The multi-head attention mechanism.
+    TransformerEncoderBlock: A single encoder block of the transformer model.
+    TransformerDecoderBlock: A single decoder block of the transformer model.
+"""
+
 import torch
 from torch import nn
 
 
 class FullyConnectedLayer(nn.Module):
+    """Fully-Connected Layer.
+
+    This module implements a simple fully-connected layer consisting of two
+    linear transformations with an activation function in between.
+
+    Args:
+        d_model (int): The input and output dimensionality.
+        d_ff (int): The number of neurons in the hidden layer.
+        activation (torch.nn.Module): The activation function to use.
+    """
     def __init__(self, d_model, d_ff=None, activation=None):
         super().__init__()
         if d_ff is None:
@@ -40,6 +63,14 @@ class FullyConnectedLayer(nn.Module):
         self.fc2 = nn.Linear(d_ff, d_model)
 
     def forward(self, x):
+        """Compute the forward pass through the layer.
+
+        Args:
+            x (torch.Tensor): The input to the layer.
+
+        Returns:
+            torch.Tensor: The output of the layer.
+        """
         x = self.fc1(x)
         if self.activation is not None:
             x = self.activation(x)
@@ -47,6 +78,20 @@ class FullyConnectedLayer(nn.Module):
 
 
 class DotProductAttention(nn.Module):
+    """Dot-Product Attention.
+
+    This module performs the dot-product attention mechanism. It projects the
+    input to query, key and value vectors and computes the attention scores
+    via matrix multiplication. Optionally, a mask can be applied to the
+    attention scores before the softmax operation to avoid attending to
+    later positions in the sequence.
+
+    Args:
+        d_model (int): The input dimensionality.
+        d_k (int): The dimensionality of the query and key vectors.
+        d_v (int): The dimensionality of the value vectors.
+        mask (bool): Whether to apply a mask to the attention scores.
+    """
     def __init__(self, d_model, d_k, d_v, mask=False):
         super().__init__()
         self.mask = mask
@@ -56,31 +101,71 @@ class DotProductAttention(nn.Module):
         self.w_k = nn.Parameter(torch.randn(d_model, d_k))
         self.w_v = nn.Parameter(torch.randn(d_model, d_v))
 
-    def forward(self, x, x_enc=None):
+    def forward(self, x_q, x_k=None, x_v=None):
+        """Compute the attention scores and weighted values.
+
+        Args:
+            x_q (torch.Tensor): Input used to compute queries.
+            x_k (torch.Tensor): (Optional) Separate input used for keys.
+            x_v (torch.Tensor): (Optional) Separate Input used for values.
+
+        Returns:
+            torch.Tensor: The weighted values.
+            torch.Tensor: The attention scores.
+        """
+        # If key and value are not provided, assume self-attention
+        if x_k is None:
+            x_k = x_q
+        if x_v is None:
+            x_v = x_q
         # First project input linearly to query, key and value
-        V, Q, K = self._projection(x, x_enc)
+        Q, K, V = self._projection(x_q, x_k, x_v)
+        # Compute attention scores for each query-key pair
         scores = torch.matmul(Q, K.transpose(-2, -1)) / self.d_k ** 0.5
         # Masking: Set upper triangular matrix to -inf before softmax
+        # Upper triangle since query i should only attend to prior keys j<=i
         if self.mask:
             mask = torch.tril(torch.ones_like(scores))
             scores = scores.masked_fill(mask == 0, -float('inf'))
-        # Probabilities via Softmax (row-wise)
+        # Probabilities via Softmax (row-wise, i.e. per query)
         attention = torch.softmax(scores, dim=-2)
+        # Weight values with attention scores
         return torch.matmul(attention, V), attention
 
-    def _projection(self, x, x_enc=None):
-        """Perform projection with query, key and value weights."""
-        V = torch.matmul(x, self.w_v)
-        if x_enc is None:
-            Q = torch.matmul(x, self.w_q)
-            K = torch.matmul(x, self.w_k)
-        else:
-            Q = torch.matmul(x_enc, self.w_q)
-            K = torch.matmul(x_enc, self.w_k)
-        return V, Q, K
+    def _projection(self, x_q, x_k, x_v):
+        """Perform projection with query, key and value weights.
+
+        Args:
+            x_q (torch.Tensor): Input used to compute queries.
+            x_k (torch.Tensor): Separate input used for keys.
+            x_v (torch.Tensor): Separate Input used for values.
+
+        Returns:
+            torch.Tensor: The projected queries.
+            torch.Tensor: The projected keys.
+            torch.Tensor: The projected values.
+        """
+        Q = torch.matmul(x_q, self.w_q)
+        K = torch.matmul(x_k, self.w_k)
+        V = torch.matmul(x_v, self.w_v)
+        return Q, K, V
 
 
 class MultiHeadAttention(nn.Module):
+    """Multi-Head Attention.
+
+    This module implements the multi-head attention mechanism. It consists
+    of multiple attention heads, each of which computes attention scores
+    independently. The outputs of the heads are concatenated and linearly
+    transformed to the desired output dimensionality.
+
+    Args:
+        d_model (int): The embedding dimensionality.
+        num_heads (int): The number of attention heads.
+        d_k (int): The dimensionality of the query and key vectors.
+        d_v (int): The dimensionality of the value vectors.
+        mask (bool): Whether to apply masking to the attention scores.
+    """
     def __init__(self, d_model, num_heads=1, d_k=None, d_v=None, mask=False):
         super().__init__()
 
@@ -95,21 +180,51 @@ class MultiHeadAttention(nn.Module):
         for i in range(num_heads):
             self.add_module(f'att_{i}', DotProductAttention(d_model, d_k, d_v, mask))
 
-        # Add final projection layer
-        self.w_proj = nn.Parameter(torch.randn(self.num_heads * d_v, d_model))
+        # Add final projection layer. (Kinda lengthy) Explanation:
+        #   This matrix maps for each head the low-dimension values to the
+        #   embedding size, i.e. maps each V from d_v to d_model. Then all
+        #   updates across all heads are simply summed up. Funnily enough these
+        #   two independent operations can be combined to a single matrix
+        #   vector product with the concatenated outputs of the heads.
+        self.w_out = nn.Parameter(torch.randn(self.num_heads * d_v, d_model))
 
-    def forward(self, x, x_encoder=None):
+    def forward(self, x_q, x_k=None, x_v=None):
+        """Compute the multi-head attention.
+
+        Args:
+            x_q (torch.Tensor): Input used to compute queries.
+            x_k (torch.Tensor): (Optional) Separate input used for keys.
+            x_v (torch.Tensor): (Optional) Separate Input used for values.
+
+        Returns:
+            torch.Tensor: The output of the multi-head attention.
+        """
         head_outputs = []
         for i in range(self.num_heads):
-            if x_encoder is not None:
-                head_output, _ = getattr(self, f'att_{i}')(x, x_encoder)
-            else:
-                head_output, _ = getattr(self, f'att_{i}')(x)
+            head_output, _ = getattr(self, f'att_{i}')(x_q, x_k, x_v)
             head_outputs.append(head_output)
-        return torch.matmul(torch.cat(head_outputs, dim=-1), self.w_proj)
+        return torch.matmul(torch.cat(head_outputs, dim=-1), self.w_out)
 
 
 class TransformerEncoderBlock(nn.Module):
+    """Transformer Encoder Block.
+
+    This module implements a single encoder block of the transformer model.
+    It consists of two sub-layers:
+        1. a multi-head self-attention layer
+        2. a feed-forward network.
+    Each of these sub-layers is followed by a layer normalization and a
+    residual connection.
+
+    Args:
+        d_model (int): The embedding dimensionality.
+        num_heads (int): The number of attention heads.
+        d_k (int): The dimensionality of the query and key vectors.
+        d_v (int): The dimensionality of the value vectors.
+        d_ff (int): The number of neurons in the hidden layer of the
+            feed-forward network.
+        dropout (float): The dropout rate for the residual connections
+    """
     def __init__(self,
                  d_model=512,
                  num_heads=8,
@@ -139,7 +254,15 @@ class TransformerEncoderBlock(nn.Module):
             self.dropout2 = None
 
     def forward(self, x):
-        # First block: Self Attention
+        """Forward pass through the encoder block.
+
+        Args:
+            x (torch.Tensor): The input to the encoder block.
+
+        Returns:
+            torch.Tensor: The output of the encoder block.
+        """
+        # First block: Self-Attention
         x1 = self.attention(x)
         if self.dropout1 is not None:
             x1 = self.dropout1(x1)
@@ -155,6 +278,25 @@ class TransformerEncoderBlock(nn.Module):
 
 
 class TransformerDecoderBlock(nn.Module):
+    """Transformer Decoder Block.
+
+    This module implements a single decoder block of the transformer model.
+    It consists of three sub-layers:
+        1. a masked multi-head self-attention layer
+        2. an encoder/decoder-attention layer
+        3. a feed-forward network.
+    Each of these sub-layers is followed by a layer normalization and a
+    residual connection.
+
+    Args:
+        d_model (int): The embedding dimensionality.
+        num_heads (int): The number of attention heads.
+        d_k (int): The dimensionality of the query and key vectors.
+        d_v (int): The dimensionality of the value vectors.
+        d_ff (int): The number of neurons in the hidden layer of the
+            feed-forward network.
+        dropout (float): The dropout rate for the residual connections.
+    """
     def __init__(self,
                  d_model=512,
                  num_heads=8,
@@ -188,6 +330,15 @@ class TransformerDecoderBlock(nn.Module):
             self.dropout3 = None
 
     def forward(self, x, x_enc):
+        """Forward pass through the decoder block.
+
+        Args:
+            x (torch.Tensor): The input from previous decoder block.
+            x_enc (torch.Tensor): The output of the encoder.
+
+        Returns:
+            torch.Tensor: The output of the decoder block.
+        """
         # First block: Masked Self-Attention
         x1 = self.masked_attention(x)
         if self.dropout1 is not None:
@@ -195,7 +346,7 @@ class TransformerDecoderBlock(nn.Module):
         x  = self.norm1(x + x1)
 
         # Second block: Encoder/Decoder-Attention
-        x1 = self.attention(x, x_enc)
+        x1 = self.attention(x, x_k=x_enc, x_v=x_enc)
         if self.dropout2 is not None:
             x1 = self.dropout2(x1)
         x = self.norm2(x + x1)
