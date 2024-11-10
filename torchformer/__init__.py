@@ -30,5 +30,8 @@ from .layers import MultiHeadAttention
 from .layers import DotProductAttention
 from .layers import TransformerEncoderBlock
 from .layers import TransformerDecoderBlock
+from .layers import PositionalEncoding
+
+from .models import Transformer
 
 __version__ = "0.1.0"

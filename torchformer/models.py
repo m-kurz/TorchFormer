@@ -68,6 +68,7 @@ class Transformer(nn.Module):
             self,
             num_blocks,
             vocab_size,
+            context_length,
             d_model=512,
             num_heads=8,
             d_k=None,
@@ -88,10 +89,10 @@ class Transformer(nn.Module):
         decoder_list = []
         for _ in range(num_blocks):
             encoder_list.append(
-                TransformerEncoderBlock(d_model, num_heads, d_k, d_v, dff, dropout))
+                TransformerEncoderBlock(d_model, num_heads, d_k, d_v, d_ff, dropout)
             )
             decoder_list.append(
-                TransformerDecoderBlock(d_model, num_heads, d_k, d_v, dff, dropout))
+                TransformerDecoderBlock(d_model, num_heads, d_k, d_v, d_ff, dropout)
             )
         self.encoder = nn.ModuleList(encoder_list)
         self.decoder = nn.ModuleList(decoder_list)
@@ -104,7 +105,7 @@ class Transformer(nn.Module):
         self.dropout_dec = nn.Dropout(dropout)
 
         # Create the (shared) embedding layer
-        self.w_embed = nn.Parameter(torch.randn(d_model, vocab_size))
+        self.embedding = nn.Embedding(vocab_size, d_model)
         self.output_bias = nn.Parameter(torch.zeros(vocab_size))
 
     def forward(self, x, y):
@@ -126,38 +127,25 @@ class Transformer(nn.Module):
             torch.Tensor: The output probabilities per token.
         """
         # 1. Run the input through the embedding and encoder
-        x = self._embedding(x)
+        x = self.embedding(x)
         x = self.dropout_enc(x)
         for block in self.encoder:
             x = block(x)
 
         # 2. Run the output through the embedding and decoder
-        y = self._embedding(y)
+        y = self.embedding(y)
         y = self.dropout_dec(y)
         for block in self.decoder:
             y = block(y, x)
 
         # 3. Apply the output projection and softmax
         y = self._output_projection(y)
-        y = nn.softmax(y, dim=-1)
+        y = torch.softmax(y, dim=-1)
 
         return y
 
-    def _embedding(self, x):
-        """Apply the embedding layer and positional encoding.
-
-        Args:
-            x (torch.Tensor): The tokenized input sequence.
-
-        Returns:
-            torch.Tensor: The embedded and positional encoded input sequence.
-        """
-        x = nn.matmul(x, self.w_embed)
-        x = self.positional_encoding(x)
-        return x
-
     def _output_projection(self, x):
-        """Apply the output projection.
+        """Apply the output projection with shared embedding weights.
 
         Args:
             x (torch.Tensor): The decoder output.
@@ -165,4 +153,4 @@ class Transformer(nn.Module):
         Returns:
             torch.Tensor: The output probabilities per token.
         """
-        return nn.matmul(x, self.w_embed.T) + self.output_bias
+        return torch.matmul(x, self.embedding.weight.T) + self.output_bias
